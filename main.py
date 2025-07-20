@@ -1,10 +1,12 @@
-# main.py
 import os
 import requests
 from flask import Flask, request, abort
 from dotenv import load_dotenv
-from linebot import LineBotApi, WebhookHandler
-from linebot.models import MessageEvent, TextMessage, TextSendMessage, ImageSendMessage
+
+from linebot.v3.webhook import WebhookHandler
+from linebot.v3.messaging import MessagingApi, ApiClient
+from linebot.v3.messaging.models import TextMessage, ImageMessage
+from linebot.v3.webhook.models import MessageEvent, TextMessageContent
 from linebot.exceptions import InvalidSignatureError
 
 load_dotenv()
@@ -15,8 +17,10 @@ LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 ARK_API_KEY = os.getenv("ARK_API_KEY")
 
-line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
+messaging_api = MessagingApi(
+    ApiClient(configuration={"access_token": LINE_CHANNEL_ACCESS_TOKEN})
+)
 
 # ฟังก์ชันเรียก Seedream API
 def generate_image(prompt):
@@ -33,7 +37,12 @@ def generate_image(prompt):
         "watermark": True
     }
 
-    response = requests.post("https://ark.ap-southeast.bytepluses.com/api/v3/images/generations", headers=headers, json=data)
+    response = requests.post(
+        "https://ark.ap-southeast.bytepluses.com/api/v3/images/generations",
+        headers=headers,
+        json=data
+    )
+
     if response.status_code == 200:
         return response.json()['data'][0]['url']
     else:
@@ -41,7 +50,7 @@ def generate_image(prompt):
 
 @app.route("/callback", methods=["POST"])
 def callback():
-    signature = request.headers["X-Line-Signature"]
+    signature = request.headers.get("X-Line-Signature", "")
     body = request.get_data(as_text=True)
     try:
         handler.handle(body, signature)
@@ -49,20 +58,41 @@ def callback():
         abort(400)
     return "OK"
 
-@handler.add(MessageEvent, message=TextMessage)
+@handler.add(MessageEvent)
 def handle_message(event):
+    if not isinstance(event.message, TextMessageContent):
+        return
+
     text = event.message.text.strip()
+    user_id = event.source.user_id
+    reply_token = event.reply_token
+
     if text.startswith("/create"):
         prompt = text.replace("/create", "", 1).strip()
         if not prompt:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ พิมพ์ไม่ถูกต้อง ตัวอย่าง: /create แมวใส่หมวก"))
+            messaging_api.reply_message(
+                reply_token,
+                [TextMessage(text="❌ พิมพ์ไม่ถูกต้อง ตัวอย่าง: /create แมวใส่หมวก")]
+            )
             return
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⏳ รอสักครู่ กำลังสร้างภาพ..."))
+
+        # ตอบกลับว่ากำลังประมวลผล
+        messaging_api.reply_message(
+            reply_token,
+            [TextMessage(text="⏳ รอสักครู่ กำลังสร้างภาพ...")]
+        )
+
         image_url = generate_image(prompt)
         if image_url:
-            line_bot_api.push_message(event.source.user_id, ImageSendMessage(original_content_url=image_url, preview_image_url=image_url))
+            messaging_api.push_message(
+                user_id,
+                [ImageMessage(original_content_url=image_url, preview_image_url=image_url)]
+            )
         else:
-            line_bot_api.push_message(event.source.user_id, TextSendMessage(text="❌ เกิดข้อผิดพลาด ลองใหม่อีกครั้งนะคะ"))
+            messaging_api.push_message(
+                user_id,
+                [TextMessage(text="❌ เกิดข้อผิดพลาด ลองใหม่อีกครั้งนะคะ")]
+            )
 
 if __name__ == "__main__":
     from waitress import serve
