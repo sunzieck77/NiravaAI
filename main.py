@@ -1,3 +1,4 @@
+# main.py
 import os
 import requests
 from flask import Flask, request, abort
@@ -9,10 +10,11 @@ from linebot.exceptions import InvalidSignatureError
 load_dotenv()
 app = Flask(__name__)
 
-# โหลดค่าจาก .env
+# ดึงข้อมูลจาก .env
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 ARK_API_KEY = os.getenv("ARK_API_KEY")
+
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
@@ -37,7 +39,6 @@ def generate_image(prompt):
     else:
         return None
 
-# รับ Webhook
 @app.route("/callback", methods=["POST"])
 def callback():
     signature = request.headers["X-Line-Signature"]
@@ -48,21 +49,20 @@ def callback():
         abort(400)
     return "OK"
 
-# รับข้อความจากแชท
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     text = event.message.text.strip()
     if text.startswith("/create"):
         prompt = text.replace("/create", "", 1).strip()
         if not prompt:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="อาจจะยังพิพม์ไม่ถูกค่ะ ตัวอย่างที่ถูกเช่น /create แมวใส่หมวก"))
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ พิมพ์ไม่ถูกต้อง ตัวอย่าง: /create แมวใส่หมวก"))
             return
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⏳ รอซักครูนะคะ Nirava กำลังสร้างภาพ..."))
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⏳ รอสักครู่ กำลังสร้างภาพ..."))
         image_url = generate_image(prompt)
         if image_url:
             line_bot_api.push_message(event.source.user_id, ImageSendMessage(original_content_url=image_url, preview_image_url=image_url))
         else:
-            line_bot_api.push_message(event.source.user_id, TextSendMessage(text="เกิดปัญหาขัดข้อง Nirava ต้องขออภัยด้วยจริงๆค่ะ"))
+            line_bot_api.push_message(event.source.user_id, TextSendMessage(text="❌ เกิดข้อผิดพลาด ลองใหม่อีกครั้งนะคะ"))
 
 if __name__ == "__main__":
     from waitress import serve
