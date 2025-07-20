@@ -1,99 +1,70 @@
-import os
-import requests
 from flask import Flask, request, abort
-from dotenv import load_dotenv
+from linebot.v3.webhooks import WebhookHandler, MessageEvent, TextMessageContent
+from linebot.v3.messaging import MessagingApi, Configuration, ApiClient
+from linebot.v3.messaging.models import TextMessage
 
-from linebot.v3.webhook import WebhookHandler
-from linebot.v3.messaging import MessagingApi, ApiClient
-from linebot.v3.messaging.models import TextMessage, ImageMessage
-from linebot.v3.webhook.models import MessageEvent, TextMessageContent
-from linebot.exceptions import InvalidSignatureError
+import os
 
-load_dotenv()
 app = Flask(__name__)
 
-# ดึงข้อมูลจาก .env
-LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
-LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
-ARK_API_KEY = os.getenv("ARK_API_KEY")
+# 🟡 ใช้ ENV สำหรับความปลอดภัย
+CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
+CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 
-handler = WebhookHandler(LINE_CHANNEL_SECRET)
-messaging_api = MessagingApi(
-    ApiClient(configuration={"access_token": LINE_CHANNEL_ACCESS_TOKEN})
-)
+# 🛡️ ตรวจสอบตัวแปร
+if not CHANNEL_ACCESS_TOKEN or not CHANNEL_SECRET:
+    raise ValueError("Environment variables LINE_CHANNEL_ACCESS_TOKEN and LINE_CHANNEL_SECRET must be set.")
 
-# ฟังก์ชันเรียก Seedream API
-def generate_image(prompt):
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {ARK_API_KEY}",
-    }
-    data = {
-        "model": "seedream-3-0-t2i-250415",
-        "prompt": prompt,
-        "response_format": "url",
-        "size": "1080x1920",
-        "guidance_scale": 3,
-        "watermark": True
-    }
+# 🟢 ตั้งค่า Messaging API Client
+configuration = Configuration(access_token=CHANNEL_ACCESS_TOKEN)
+api_client = ApiClient(configuration)
+line_bot_api = MessagingApi(api_client)
 
-    response = requests.post(
-        "https://ark.ap-southeast.bytepluses.com/api/v3/images/generations",
-        headers=headers,
-        json=data
-    )
+# 🟢 Handler สำหรับ Webhook
+handler = WebhookHandler(CHANNEL_SECRET)
 
-    if response.status_code == 200:
-        return response.json()['data'][0]['url']
-    else:
-        return None
 
-@app.route("/callback", methods=["POST"])
+@app.route("/callback", methods=['POST'])
 def callback():
-    signature = request.headers.get("X-Line-Signature", "")
+    signature = request.headers.get('X-Line-Signature')
     body = request.get_data(as_text=True)
+
     try:
         handler.handle(body, signature)
-    except InvalidSignatureError:
+    except Exception as e:
+        print("❌ ERROR:", e)
         abort(400)
-    return "OK"
+    return 'OK'
 
-@handler.add(MessageEvent)
+
+# ✅ ตอบกลับข้อความเมื่อมีคนส่งมา
+@handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
-    if not isinstance(event.message, TextMessageContent):
-        return
+    try:
+        user_message = event.message.text
+        reply_token = event.reply_token
 
-    text = event.message.text.strip()
-    user_id = event.source.user_id
-    reply_token = event.reply_token
-
-    if text.startswith("/create"):
-        prompt = text.replace("/create", "", 1).strip()
-        if not prompt:
-            messaging_api.reply_message(
-                reply_token,
-                [TextMessage(text="❌ พิมพ์ไม่ถูกต้อง ตัวอย่าง: /create แมวใส่หมวก")]
-            )
-            return
-
-        # ตอบกลับว่ากำลังประมวลผล
-        messaging_api.reply_message(
+        # ตัวอย่างการตอบข้อความกลับ
+        response_text = f"คุณพิมพ์ว่า: {user_message}"
+        line_bot_api.reply_message(
             reply_token,
-            [TextMessage(text="⏳ รอสักครู่ กำลังสร้างภาพ...")]
+            [
+                TextMessage(text=response_text)
+            ]
         )
 
-        image_url = generate_image(prompt)
-        if image_url:
-            messaging_api.push_message(
-                user_id,
-                [ImageMessage(original_content_url=image_url, preview_image_url=image_url)]
+    except Exception as e:
+        print("❌ Internal error:", e)
+
+        # หากต้องการส่ง push กลับหาผู้ใช้
+        try:
+            line_bot_api.push_message(
+                to=event.source.user_id,
+                messages=[TextMessage(text="❌ เกิดข้อผิดพลาด ลองใหม่อีกครั้งนะคะ")]
             )
-        else:
-            messaging_api.push_message(
-                user_id,
-                [TextMessage(text="❌ เกิดข้อผิดพลาด ลองใหม่อีกครั้งนะคะ")]
-            )
+        except:
+            print("⚠️ ไม่สามารถส่ง push message ได้")
+
 
 if __name__ == "__main__":
-    from waitress import serve
-    serve(app, host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    app.run()
